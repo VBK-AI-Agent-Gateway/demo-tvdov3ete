@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>星际躲避 · Star Dodge</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: #05070f; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; color: #e8f0ff; }
+  #wrap { position: relative; width: min(96vw, 480px); aspect-ratio: 3/4; max-height: 92vh; }
+  canvas { width: 100%; height: 100%; display: block; border-radius: 18px;
+    background: radial-gradient(ellipse at 50% 0%, #12213f 0%, #05070f 70%);
+    box-shadow: 0 24px 60px rgba(0,0,0,.6), 0 0 0 1px rgba(120,170,255,.15) inset; touch-action: none; }
+  #hud { position: absolute; top: 12px; left: 14px; right: 14px; display: flex;
+    justify-content: space-between; font-size: 14px; letter-spacing: .5px; pointer-events: none; text-shadow: 0 2px 6px #000; }
+  #hud b { color: #7fd8ff; }
+  .overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 14px; text-align: center; background: rgba(5,7,15,.72); border-radius: 18px; padding: 24px; }
+  .overlay.hidden { display: none; }
+  h1 { margin: 0; font-size: 26px; letter-spacing: 1px; }
+  h1 span { color: #7fd8ff; }
+  p { margin: 0; opacity: .78; font-size: 14px; line-height: 1.7; }
+  button { margin-top: 6px; padding: 12px 30px; font-size: 16px; font-weight: 600; color: #04121f;
+    cursor: pointer; border: 0; border-radius: 999px; background: linear-gradient(135deg, #7fd8ff, #63ffd0);
+    box-shadow: 0 8px 24px rgba(99,255,208,.28); }
+  .big { font-size: 30px; color: #ffde7a; font-weight: 700; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game"></canvas>
+  <div id="hud"><div>分数 <b id="score">0</b></div><div>最佳 <b id="best">0</b></div></div>
+  <div class="overlay" id="start">
+    <h1>星际<span>躲避</span></h1>
+    <p>左右移动飞船，躲开陨石<br>电脑：← → / A D　　手机：左右拖动</p>
+    <button id="btnStart">开始游戏</button>
+  </div>
+  <div class="overlay hidden" id="over">
+    <h1>游戏结束</h1>
+    <p>本局得分 <span class="big" id="final">0</span></p>
+    <p id="record"></p>
+    <button id="btnAgain">再来一局</button>
+  </div>
+</div>
+<script>
+(function () {
+  const canvas = document.getElementById('game'), ctx = canvas.getContext('2d');
+  const elScore=document.getElementById('score'), elBest=document.getElementById('best');
+  const elStart=document.getElementById('start'), elOver=document.getElementById('over');
+  const elFinal=document.getElementById('final'), elRecord=document.getElementById('record');
+  let W=0,H=0,dpr=1;
+  function resize(){ dpr=Math.min(window.devicePixelRatio||1,2); const r=canvas.getBoundingClientRect();
+    W=r.width;H=r.height; canvas.width=Math.round(W*dpr); canvas.height=Math.round(H*dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0); }
+  window.addEventListener('resize',resize);
+  const ship={w:34,h:44,x:0,y:0};
+  let rocks=[],stars=[],score=0,best=+(localStorage.getItem('starDodgeBest')||0);
+  let running=false,lastT=0,spawnAcc=0,tAcc=0,keyL=false,keyR=false,targetX=null;
+  elBest.textContent=best;
+  function reset(){ score=0; elScore.textContent=0; rocks=[]; spawnAcc=0; tAcc=0;
+    ship.x=W/2; ship.y=H-ship.h-26; targetX=null;
+    stars=Array.from({length:70},()=>({x:Math.random()*W,y:Math.random()*H,r:Math.random()*1.6+.4,s:Math.random()*26+8})); }
+  function spawn(){ const r=Math.random()*16+9; rocks.push({x:Math.random()*(W-2*r)+r,y:-r*2,r,
+    vy:110+Math.random()*130+score*2.4, vx:(Math.random()-.5)*70, rot:0, rv:(Math.random()-.5)*3}); }
+  function hit(a,b){ return Math.hypot(a.x-b.x,a.y-b.y)<a.r+b.r*.62; }
+  function drawShip(x,y){ ctx.save(); ctx.translate(x,y); ctx.beginPath();
+    ctx.moveTo(0,-ship.h/2); ctx.lineTo(ship.w/2,ship.h/2); ctx.lineTo(0,ship.h/2-12);
+    ctx.lineTo(-ship.w/2,ship.h/2); ctx.closePath();
+    const g=ctx.createLinearGradient(0,-ship.h/2,0,ship.h/2);
+    g.addColorStop(0,'#a8ecff'); g.addColorStop(1,'#2f8fd8'); ctx.fillStyle=g;
+    ctx.shadowColor='#7fd8ff'; ctx.shadowBlur=16; ctx.fill(); ctx.restore(); }
+  function drawRock(r){ ctx.save(); ctx.translate(r.x,r.y); ctx.rotate(r.rot); ctx.beginPath();
+    const n=7; for(let i=0;i<n;i++){ const a=(i/n)*Math.PI*2, rr=r.r*(.78+((i*37)%10)/40);
+      i?ctx.lineTo(Math.cos(a)*rr,Math.sin(a)*rr):ctx.moveTo(Math.cos(a)*rr,Math.sin(a)*rr); }
+    ctx.closePath(); ctx.fillStyle='#5b6480'; ctx.fill(); ctx.strokeStyle='#98a4c4'; ctx.lineWidth=1.4; ctx.stroke(); ctx.restore(); }
+  function step(dt){ for(const s of stars){ s.y+=s.s*dt; if(s.y>H){s.y=-2;s.x=Math.random()*W;} }
+    const sp=430; if(keyL) ship.x-=sp*dt; if(keyR) ship.x+=sp*dt;
+    if(targetX!==null) ship.x+=(targetX-ship.x)*Math.min(1,dt*14);
+    ship.x=Math.max(ship.w/2,Math.min(W-ship.w/2,ship.x));
+    spawnAcc+=dt; const gap=Math.max(.26,.8-score*.012);
+    if(spawnAcc>gap){ spawnAcc=0; spawn(); }
+    for(const r of rocks){ r.y+=r.vy*dt; r.x+=r.vx*dt; r.rot+=r.rv*dt; }
+    rocks=rocks.filter(r=>r.y-r.r<H+40);
+    tAcc+=dt; while(tAcc>.1){ tAcc-=.1; score+=1; elScore.textContent=score; }
+    const box={x:ship.x,y:ship.y,r:Math.min(ship.w,ship.h)/2};
+    for(const r of rocks) if(hit(r,box)) return gameOver(); }
+  function frame(t){ if(!running) return; const dt=Math.min(.05,(t-lastT)/1000||0); lastT=t;
+    ctx.clearRect(0,0,W,H);
+    for(const s of stars){ ctx.globalAlpha=.25+s.r/2.4; ctx.fillStyle='#cfe6ff'; ctx.fillRect(s.x,s.y,s.r,s.r); }
+    ctx.globalAlpha=1; for(const r of rocks) drawRock(r); drawShip(ship.x,ship.y); step(dt); requestAnimationFrame(frame); }
+  function start(){ resize(); reset(); elStart.classList.add('hidden'); elOver.classList.add('hidden');
+    running=true; lastT=performance.now(); requestAnimationFrame(frame); }
+  function gameOver(){ running=false; elFinal.textContent=score;
+    if(score>best){ best=score; localStorage.setItem('starDodgeBest',best); elBest.textContent=best; elRecord.textContent='🎉 新纪录！'; }
+    else { elRecord.textContent='最佳纪录 '+best+' 分'; } elOver.classList.remove('hidden'); }
+  addEventListener('keydown',e=>{ const k=e.key.toLowerCase();
+    if(k==='arrowleft'||k==='a') keyL=true; if(k==='arrowright'||k==='d') keyR=true;
+    if(k===' '&&!running){ e.preventDefault(); start(); } });
+  addEventListener('keyup',e=>{ const k=e.key.toLowerCase();
+    if(k==='arrowleft'||k==='a') keyL=false; if(k==='arrowright'||k==='d') keyR=false; });
+  function pointer(e){ if(!running) return; const r=canvas.getBoundingClientRect();
+    const cx=(e.touches?e.touches[0].clientX:e.clientX);
+    targetX=Math.max(ship.w/2,Math.min(W-ship.w/2,cx-r.left)); }
+  canvas.addEventListener('pointerdown',e=>{ e.preventDefault(); pointer(e); });
+  canvas.addEventListener('pointermove',e=>{ if(e.buttons||e.pointerType==='touch') pointer(e); });
+  canvas.addEventListener('pointerup',()=>{ targetX=null; });
+  document.getElementById('btnStart').addEventListener('click',start);
+  document.getElementById('btnAgain').addEventListener('click',start);
+  resize(); reset(); drawShip(ship.x,ship.y);
+})();
+</script>
+</body>
+</html>
